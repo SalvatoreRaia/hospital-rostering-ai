@@ -1,0 +1,13 @@
+key,enabled,params,description
+coverage_exact_required,1,"{}","For each day and shift, exactly the required number of residents must be assigned."
+one_shift_per_day,1,"{}","A resident can work at most one shift per day."
+no_afternoon_then_morning,1,"{}","If a resident works an afternoon shift on day d, they cannot work a morning shift on day d+1."
+enforce_unavailability,1,"{}","On days marked as unavailable for a resident, they cannot be assigned to any shift."
+night_shift_exclusion,1,"{}","If a resident has a night shift on day d, they cannot be assigned to any day shift on day d or day d+1."
+fairness_strict_minmax,1,"{}","Balance total shifts so each resident has either the same number or differs by at most one."
+max_shifts_per_week,0,"{""limit"":5}","Optional: at most N shifts per ISO week for each resident."
+max_consecutive_work_days,0,"{""limit"":5}","Optional: do not allow more than N consecutive working days."
+min_free_days_per_week,0,"{""min_free"":1}","Optional: ensure at least N days off per ISO week."
+forbid_resident_shift,0,"{""resident"":""Res0"",""shift"":""afternoon""}","Optional: resident R never works shift S."
+max_afternoon_per_week,0,"{""limit"":2}","Optional: cap afternoon shifts per week per resident."
+max_total_shifts,0,"{""limit"":20}","Optional: total shifts in the whole period are limited to N per resident."
