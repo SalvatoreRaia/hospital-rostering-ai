@@ -4,7 +4,7 @@ conditions_registry.py
 
 A small, CSV-driven registry of constraints for your OR-Tools hospital scheduler.
 
-How it is used from your main script (scheduler.py)
+How it is used from the main script (scheduler.py)
 ---------------------------------------------------
 After you construct the model and decision variables x[(resident, day, shift)],
 call:
@@ -48,12 +48,6 @@ Example rows:
     max_afternoon_per_week,0,"{""limit"":2}"
     max_total_shifts,0,"{""limit"":20}"
 
-Notes
------
-- The "original constraints" from your scheduler.py are included here so they can
-  be toggled as well. If your main still adds those base constraints directly,
-  do NOT enable the duplicate here (it is harmless but redundant).
-- All constraints here are hard constraints (Add()), not soft penalties.
 """
 
 import os
@@ -67,33 +61,32 @@ from collections import defaultdict
 
 def load_conditions_from_csv(data_dir: str, filename: str = "conditions.csv"):
     """
-    Read enabled constraints from data/conditions.csv.
+    Read enabled constraints from a CSV file.
 
-    Parameters
-    ----------
-    data_dir : str
-        Folder where conditions.csv lives.
-    filename : str
-        Name of the CSV file (default "conditions.csv").
-
-    Returns
-    -------
-    list[dict]
-        A list like [{"key": "max_shifts_per_week", "params": {...}}, ...]
-        for rows with enabled in {1, "1", "true", "yes"} (case-insensitive).
+    If the CSV also contains settings (like settings.csv), we keep only rows where type == "constraint".
+    Returns a list like [{"key": "max_shifts_per_week", "params": {...}}, ...]
+    for rows with enabled in {1, "1", "true", "yes"} (case-insensitive).
     """
     path = os.path.join(data_dir, filename)
     if not os.path.exists(path):
-        print("No data/conditions.csv found — skipping extra conditions.")
+        print(f"No {filename} found — skipping extra conditions.")
         return []
 
-    df = pd.read_csv(path)
+    # More tolerant CSV parsing (handles spaces after commas and quoted JSON)
+    df = pd.read_csv(path, engine="python", skipinitialspace=True)
+
+
+    # Keep only rows where type == "constraint" (case-insensitive).
+    # This lets settings.csv hold both settings and constraints in one file.
+    if "type" in df.columns:
+        df = df[df["type"].astype(str).str.lower() == "constraint"]
+
     required_cols = {"key", "enabled", "params"}
     if not required_cols.issubset(df.columns):
-        print("conditions.csv must contain columns: key, enabled, params. Skipping.")
+        print(f"{filename} must contain columns: key, enabled, params. Skipping.")
         return []
 
-    # Keep only rows that are enabled
+    # Enabled mask: accept 1/true/yes
     enabled_mask = df["enabled"].astype(str).str.lower().isin(["1", "true", "yes"])
     rows = df[enabled_mask]
 
@@ -101,7 +94,6 @@ def load_conditions_from_csv(data_dir: str, filename: str = "conditions.csv"):
     for _, row in rows.iterrows():
         key = str(row["key"]).strip()
         raw = row.get("params", "{}")
-        # Parse JSON parameters; if parsing fails, use empty dict
         params = {}
         if isinstance(raw, str) and raw.strip():
             try:
@@ -111,7 +103,7 @@ def load_conditions_from_csv(data_dir: str, filename: str = "conditions.csv"):
                 params = {}
         out.append({"key": key, "params": params})
     if out:
-        print(f"Loaded {len(out)} extra condition(s) from CSV.")
+        print(f"Loaded {len(out)} extra condition(s) from {filename}.")
     return out
 
 

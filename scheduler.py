@@ -15,7 +15,7 @@ DATA_DIR = os.path.join(BASE_DIR, "data")
 OUTPUTS_DIR = os.path.join(BASE_DIR, "outputs")
 
 # Toggle: use CSV overrides for residents / required_staff / calendar / unavailability / night_shifts
-USE_CSV = False  # set to True when your CSVs are ready
+USE_CSV = True  # set to True when your CSVs are ready
 
 # Toggle: use constraints from data/conditions.csv via conditions_registry.py
 USE_EXTRA_CONDITIONS = True
@@ -33,6 +33,131 @@ RUN_TS = datetime.now().strftime("%Y%m%d_%H%M%S")
 RUN_DIR = os.path.join(OUTPUTS_DIR, f"run_{RUN_TS}")
 os.makedirs(RUN_DIR, exist_ok=True)
 
+# === CSV LOADERS (settings + residents) ===
+
+def _parse_bool(v):
+    """Parse typical truthy strings/numbers to bool: 1/true/yes/on → True; else False."""
+    if pd.isna(v):
+        return False
+    s = str(v).strip().lower()
+    return s in {"1", "true", "yes", "y", "on"}
+
+def load_settings_csv(data_dir):
+    """
+    Read SETTINGS + (later) CONSTRAINTS rows from settings.csv.
+    Returns a dict: start_date, end_date, weekdays_only, required_staff, seed.
+    Missing values fall back to your defaults (defined above).
+    """
+    path = os.path.join(data_dir, "settings.csv")
+    out = {
+        "start_date": None,
+        "end_date": None,
+        "weekdays_only": True,
+        "required_staff": {"morning": 4, "afternoon": 2},
+        "seed": None,
+    }
+    if not os.path.exists(path):
+        print("settings.csv not found — using defaults for dates/coverage.")
+        return out
+
+    # More tolerant CSV parsing (handles spaces after commas and quoted JSON)
+    df = pd.read_csv(path, engine="python", skipinitialspace=True)
+
+    # SETTINGS rows (type == "setting"); if no 'type' column, treat all as settings.
+    df_set = df[df["type"].astype(str).str.lower() == "setting"] if "type" in df.columns else df
+    if not df_set.empty:
+        kv = {str(k): v for k, v in zip(df_set["key"], df_set["value"])}
+        # Dates
+        sd = kv.get("start_date")
+        ed = kv.get("end_date")
+        if sd:
+            out["start_date"] = datetime.strptime(str(sd), "%Y-%m-%d")
+        if ed:
+            out["end_date"] = datetime.strptime(str(ed), "%Y-%m-%d")
+        # Weekdays only
+        wdo = kv.get("weekdays_only")
+        if wdo is not None:
+            out["weekdays_only"] = _parse_bool(wdo)
+        # Required staff
+        m = kv.get("required_staff_morning")
+        a = kv.get("required_staff_afternoon")
+        if m is not None and str(m) != "":
+            out["required_staff"]["morning"] = int(m)
+        if a is not None and str(a) != "":
+            out["required_staff"]["afternoon"] = int(a)
+        # Seed
+        seed = kv.get("seed")
+        if seed is not None and str(seed).strip() != "":
+            out["seed"] = int(seed)
+
+    return out
+
+def _coerce_json_list(cell):
+    """
+    Parse a CSV cell into list[str] robustly.
+    Accepts:
+      - JSON arrays like '["2025-07-03","2025-07-10"]'
+      - '[]' or empty -> []
+      - Fallback: '2025-07-01; 2025-07-02' or comma-separated -> ["2025-07-01","2025-07-02"]
+      - Single value '2025-07-01' -> ["2025-07-01"]
+    Trims spaces and drops empties. This keeps CSV editing flexible (JSON or simple strings).
+    """
+    if pd.isna(cell):
+        return []
+    s = str(cell).strip()
+    if s == "" or s == "[]":
+        return []
+    try:
+        val = json.loads(s)
+        if isinstance(val, list):
+            return [str(x).strip() for x in val if str(x).strip()]
+    except Exception:
+        pass
+    # Fallback if someone used semicolons/commas instead of JSON
+    sep = ";" if ";" in s else ("," if "," in s else None)
+    if sep:
+        return [t.strip() for t in s.split(sep) if t.strip()]
+    return [s] if s else []
+
+def load_residents_csv(data_dir):
+    """
+    Read residents.csv and build:
+      - residents: list[str]
+      - unavailable: dict[name] -> list[str]
+      - night_shifts: dict[name] -> list[str]
+    We KEEP data exactly as given (no random fill, no dedup).
+    """
+    path = os.path.join(data_dir, "residents.csv")
+    residents = []
+    unavailable = {}
+    night_shifts = {}
+    if not os.path.exists(path):
+        print("residents.csv not found — using default generated residents.")
+        return residents, unavailable, night_shifts
+
+    df = pd.read_csv(path)
+    required = {"resident", "unavailability", "night_shifts"}
+    if not required.issubset(df.columns):
+        missing = required - set(df.columns)
+        raise ValueError(f"residents.csv missing columns: {sorted(missing)}")
+
+    # Read rows and keep dates exactly as given (no dedup, no horizon pruning)
+    for _, row in df.iterrows():
+        name = str(row["resident"]).strip()
+        if not name:
+            continue  # skip blank names
+        residents.append(name)
+
+        unav   = _coerce_json_list(row["unavailability"])
+        nshift = _coerce_json_list(row["night_shifts"])
+
+        unavailable[name] = unav
+        night_shifts[name] = nshift
+
+    return residents, unavailable, night_shifts
+
+
+
 # =========================
 # 1) GLOBAL DEFAULTS (can be overridden by CSVs)
 # =========================
@@ -45,103 +170,61 @@ shifts = ["morning", "afternoon"]
 start_date = datetime(2025, 7, 1)
 end_date = datetime(2025, 7, 31)
 
-# ---- CSV OVERRIDES (optional) ----
+# ---- CSV OVERRIDES (settings.csv) ----
+WEEKDAYS_ONLY = True  # default; may be overridden by settings.csv
 if USE_CSV:
-    # residents.csv — column: resident
-    path = os.path.join(DATA_DIR, "residents.csv")
-    if os.path.exists(path):
-        df_res = pd.read_csv(path)
-        if "resident" in df_res.columns:
-            names = [str(x) for x in df_res["resident"].dropna().tolist()]
-            if names:
-                residents = names
-                print(f"Loaded {len(residents)} residents from CSV.")
+    settings = load_settings_csv(DATA_DIR)
+    if settings["start_date"] is not None:
+        start_date = settings["start_date"]
+    if settings["end_date"] is not None:
+        end_date = settings["end_date"]
+    WEEKDAYS_ONLY = settings["weekdays_only"]
+    required_staff = settings["required_staff"]
+    SEED = settings["seed"]
+    if SEED is not None:
+        random.seed(SEED)
+else:
+    WEEKDAYS_ONLY = True  # keep original behavior
 
-    # required_staff.csv — columns: shift,required
-    path = os.path.join(DATA_DIR, "required_staff.csv")
-    if os.path.exists(path):
-        df_req = pd.read_csv(path)
-        if set(["shift", "required"]).issubset(df_req.columns):
-            tmp = {str(row["shift"]): int(row["required"]) for _, row in df_req.iterrows()}
-            if "morning" in tmp and "afternoon" in tmp:
-                required_staff = {"morning": tmp["morning"], "afternoon": tmp["afternoon"]}
-                print(f"Loaded required_staff from CSV: {required_staff}")
-            else:
-                print("required_staff.csv must define 'morning' and 'afternoon'.")
-
-    # calendar.csv — columns: start_date,end_date (YYYY-MM-DD)
-    path = os.path.join(DATA_DIR, "calendar.csv")
-    if os.path.exists(path):
-        df_cal = pd.read_csv(path)
-        if set(["start_date", "end_date"]).issubset(df_cal.columns) and len(df_cal) >= 1:
-            sd = str(df_cal.loc[0, "start_date"])
-            ed = str(df_cal.loc[0, "end_date"])
-            try:
-                start_date = datetime.strptime(sd, "%Y-%m-%d")
-                end_date = datetime.strptime(ed, "%Y-%m-%d")
-                print(f"Loaded calendar from CSV: {sd} → {ed} (weekdays only).")
-            except Exception as e:
-                print(f"calendar.csv date parse error: {e}")
-
-# Build weekday list and date map
+# Build day list and date map (weekdays vs full week)
 days = []
 date_map = {}
 curr = start_date
 while curr <= end_date:
-    if curr.weekday() < 5:  # Mon..Fri
+    # Include a date if:
+    # - WEEKDAYS_ONLY is False  -> include all days (Mon..Sun)
+    # - WEEKDAYS_ONLY is True   -> include only Mon..Fri (weekday() < 5)
+    # (not WEEKDAYS_ONLY) short-circuits the OR, so False → test weekday; True → include all.
+    if (not WEEKDAYS_ONLY) or (curr.weekday() < 5):
         lab = curr.strftime("%Y-%m-%d")
         days.append(lab)
         date_map[lab] = curr
     curr += timedelta(days=1)
 
-print(f"Found {len(days)} weekdays in the selected period.")
+print(f"Found {len(days)} day(s) in the selected period. Weekdays only: {WEEKDAYS_ONLY}")
 print("Days being scheduled:", days)
 
 # =========================
 # 2) RANDOM OR CSV CONSTRAINT INPUTS (unavailability & night shifts)
 # =========================
-print("\nGenerating random constraints...")
+
+print("\nLoading residents and constraints input...")
 
 unavailable = {}
 night_shifts = {}
 
 if USE_CSV:
-    # Initialize
-    for r in residents:
-        unavailable[r] = []
-        night_shifts[r] = []
-
-    # unavailability.csv — columns: resident,date
-    path = os.path.join(DATA_DIR, "unavailability.csv")
-    if os.path.exists(path):
-        df_un = pd.read_csv(path)
-        if set(["resident", "date"]).issubset(df_un.columns):
-            for _, row in df_un.iterrows():
-                r = str(row["resident"])
-                d = str(row["date"])
-                if r in residents and d in date_map:
-                    unavailable[r].append(d)
-
-    # night_shifts.csv — columns: resident,date
-    path = os.path.join(DATA_DIR, "night_shifts.csv")
-    if os.path.exists(path):
-        df_n = pd.read_csv(path)
-        if set(["resident", "date"]).issubset(df_n.columns):
-            for _, row in df_n.iterrows():
-                r = str(row["resident"])
-                d = str(row["date"])
-                if r in residents and d in date_map:
-                    night_shifts[r].append(d)
-
-    # Fallback to preserve original behavior: ensure each resident has at least one of each
-    for r in residents:
-        if len(unavailable[r]) == 0 and len(days) > 0:
-            unavailable[r] = random.sample(days, 1)
-        if len(night_shifts[r]) == 0 and len(days) > 0:
-            night_shifts[r] = random.sample(days, 1)
-
+    # Read everything from residents.csv (no random fallback)
+    res_list, unav, nshift = load_residents_csv(DATA_DIR)
+    if res_list:
+        residents = res_list
+        print(f"Loaded {len(residents)} residents from residents.csv.")
+    else:
+        print("No residents found in residents.csv — keeping defaults.")
+    unavailable = unav
+    night_shifts = nshift
 else:
-    # Original random behavior
+    # Original random behavior for non-CSV mode (unchanged)
     for r in residents:
         unavailable[r] = random.sample(days, 1) if len(days) > 0 else []
         night_shifts[r] = random.sample(days, 1) if len(days) > 0 else []
@@ -150,12 +233,9 @@ print("\nConstraints used:")
 print("Unavailability per resident:")
 for r in residents:
     print(f"  {r}: {unavailable.get(r, [])}")
-print("\nNight shifts (>= 1 per resident):")
+print("\nNight shifts :") # (as provided; no auto-fill in CSV mode)
 for r in residents:
-    if night_shifts.get(r):
-        print(f"  {r}: {night_shifts[r][0]}")
-    else:
-        print(f"  {r}: []")
+    print(f"  {r}: {night_shifts.get(r, [])}")
 
 # =========================
 # 3) MODEL AND VARIABLES
@@ -165,10 +245,12 @@ model = cp_model.CpModel()
 
 # Decision variables: x[(resident, day, shift)] in {0,1}
 x = {}
+def _safe(r):
+    return str(r).replace(" ", "_").replace(".", "_").replace("/", "_")
 for r in residents:
     for d in days:
         for s in shifts:
-            x[(r, d, s)] = model.NewBoolVar(f"x_{r}_{d}_{s}")
+            x[(r, d, s)] = model.NewBoolVar(f"x_{_safe(r)}_{d}_{s}")
 
 # =========================
 # 4) CONSTRAINTS FROM REGISTRY (CSV-driven)
@@ -178,7 +260,7 @@ conditions_applied = []
 if USE_EXTRA_CONDITIONS:
     try:
         from conditions_registry import load_conditions_from_csv, apply_conditions
-        conditions_applied = load_conditions_from_csv(DATA_DIR)  # list of {key, params}
+        conditions_applied = load_conditions_from_csv(DATA_DIR, filename="settings.csv")  # list of {key, params}
         apply_conditions(
             model=model,
             x=x,
@@ -200,6 +282,12 @@ if USE_EXTRA_CONDITIONS:
 print("\nSolving the scheduling problem...")
 solver = cp_model.CpSolver()
 solver.parameters.log_search_progress = True
+# Make CP-SAT search reproducible when seed is provided
+if SEED is not None:
+    try:
+        solver.parameters.random_seed = int(SEED)
+    except Exception:
+        pass
 status = solver.Solve(model)
 
 status_map = {
@@ -314,10 +402,12 @@ print("\nGenerating color-coded heatmap...")
 status_matrix = pd.DataFrame(0, index=residents, columns=days)
 for r in residents:
     for d in days:
+        # Pick one; with one-shift-per-day active this shouldn’t happen.
+        # We map it to 'morning' to avoid creating a value '3'.
         m = solver.Value(x[(r, d, "morning")])
         a = solver.Value(x[(r, d, "afternoon")])
         if m and a:
-            status_matrix.loc[r, d] = 3
+            status_matrix.loc[r, d] = 1
         elif m:
             status_matrix.loc[r, d] = 1
         elif a:
@@ -348,10 +438,9 @@ cmap_colors = {
      0: "#ffffff",  # free
      1: "#6699ff",  # morning
      2: "#ffff66",  # afternoon
-     3: "#cc99ff",  # both (should not occur with one-shift-per-day)
 }
 cmap = ListedColormap([cmap_colors[i] for i in sorted(cmap_colors.keys())])
-bounds = [-2.5, -1.5, -0.5, 0.5, 1.5, 2.5, 3.5]
+bounds = [-2.5, -1.5, -0.5, 0.5, 1.5, 2.5]
 norm = BoundaryNorm(bounds, cmap.N)
 
 plt.figure(figsize=(16, 6))
@@ -381,7 +470,6 @@ legend_patches = [
     mpatches.Patch(color=cmap_colors[0], label="Free"),
     mpatches.Patch(color=cmap_colors[1], label="Morning"),
     mpatches.Patch(color=cmap_colors[2], label="Afternoon"),
-    mpatches.Patch(color=cmap_colors[3], label="Morning + Afternoon"),
 ]
 ax.legend(
     handles=legend_patches,

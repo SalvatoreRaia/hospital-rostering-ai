@@ -1,10 +1,10 @@
-resident
-Res0
-Res1
-Res2
-Res3
-Res4
-Res5
-Res6
-Res7
-Res8
+resident,unavailability,night_shifts,notes
+Giulia LM,"[""2025-07-03"",""2025-07-10""]","[""2025-07-17""]","prefers mornings"
+Lisa P.,"[]","[""2025-07-08"",""2025-07-21""]","available most days"
+Laura,"[""2025-07-07""]","[""2025-07-24""]","can swap weekends"
+Res3,"[""2025-07-02"",""2025-07-18""]","[""2025-07-15""]","new resident"
+Res4,"[""2025-07-04"",""2025-07-25""]","[]","requests fewer afternoons"
+Res5,"[]","[""2025-07-11"",""2025-07-28""]","backup only"
+Res6,"[""2025-07-09""]","[""2025-07-03""]","course on 9th"
+Res7,"[""2025-07-11"",""2025-07-22""]","[]","vacation mid-month"
+Res8,"[]","[]","fully flexible"
