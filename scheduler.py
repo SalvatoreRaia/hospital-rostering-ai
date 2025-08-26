@@ -205,7 +205,7 @@ print(f"Found {len(days)} day(s) in the selected period. Weekdays only: {WEEKDAY
 print("Days being scheduled:", days)
 
 # =========================
-# 2) RANDOM OR CSV CONSTRAINT INPUTS (unavailability & night shifts)
+# 2) RANDOM OR CSV CONSTRAINT INPUTS (residents, unavailability & night shifts)
 # =========================
 
 print("\nLoading residents and constraints input...")
@@ -281,7 +281,7 @@ if USE_EXTRA_CONDITIONS:
 # =========================
 print("\nSolving the scheduling problem...")
 solver = cp_model.CpSolver()
-solver.parameters.log_search_progress = True
+solver.parameters.log_search_progress = False
 # Make CP-SAT search reproducible when seed is provided
 if SEED is not None:
     try:
@@ -300,16 +300,29 @@ status_map = {
 print(f"Solver status: {status_map.get(status, 'UNKNOWN')}")
 
 # =========================
-# 6) OUTPUTS (CSV + heatmap PNG per run)
+# 6) OUTPUTS (wide CSV + concise terminal print + run_info)
 # =========================
+# - We write run_info.csv first (always), then stop if infeasible.
+# - We build a single wide CSV "schedule_wide.csv":
+#     * First column "Date" starts with totals rows, then all dates.
+#     * One column per resident. Cell values:
+#         M = morning assignment
+#         A = afternoon assignment
+#         N = night (night day or next day), shown only if not assigned M/A that day
+#         F = free (no M/A, not a night)
+#     * Final column "Notations" explains totals rows.
+# - We print the same wide table to the terminal.
+# - Resident-wise summary at the end is computed from the actual decision variables.
 # Always write a run_info.csv capturing all tunables and inputs,
-# even if infeasible (useful for debugging the run).
+# even if infeasible.
+
 def to_json(obj):
     try:
         return json.dumps(obj, ensure_ascii=False)
     except Exception:
         return str(obj)
 
+# 6.0 Run info (always write; useful for debugging even if infeasible)
 run_info_rows = [
     {"key": "run_timestamp", "value": RUN_TS},
     {"key": "weekdays_only", "value": True},
@@ -331,62 +344,134 @@ run_info_rows = [
 ]
 pd.DataFrame(run_info_rows).to_csv(os.path.join(RUN_DIR, "run_info.csv"), index=False)
 
-# If infeasible or worse, stop here after writing run_info.csv (no assignments / heatmap).
+# If infeasible or worse, stop after writing run_info.csv (no assignments / heatmap / wide table)
 if status not in (cp_model.FEASIBLE, cp_model.OPTIMAL):
     print("No feasible solution found for the given constraints.")
-    # Also write an empty assignments file with the right columns for consistency
-    pd.DataFrame(columns=["resident", "date", "shift"]).to_csv(
-        os.path.join(RUN_DIR, "assignments_long.csv"), index=False
-    )
-    # Nothing to plot
     raise SystemExit(0)
 
-# Build a long format of assignments: one row per (resident, date, shift) where x=1
-rows_long = []
-for d in days:
-    for s in shifts:
-        for r in residents:
-            if solver.Value(x[(r, d, s)]) == 1:
-                rows_long.append({"resident": r, "date": d, "shift": s})
-df_long = pd.DataFrame(rows_long, columns=["resident", "date", "shift"])
-df_long.to_csv(os.path.join(RUN_DIR, "assignments_long.csv"), index=False)
+# 6.1 Build a letters grid (date rows × resident columns)
+letters = pd.DataFrame(index=days, columns=residents, data="")
 
-# (Optional) Console table like your original script (wide format)
-schedule = []
-for d in days:
-    for s in shifts:
-        row = {"Date": d, "Shift": s}
-        for r in residents:
-            row[r] = solver.Value(x[(r, d, s)])
-        schedule.append(row)
-df_wide = pd.DataFrame(schedule)
-print("\nFinal Schedule (wide table):\n")
-print(df_wide.to_string(index=False))
-
-# Resident-wise summary (same logic as before)
-print("\nResident-wise summary:")
+# Precompute night days per resident: mark the night date and the next date
+night_lookup = {r: set() for r in residents}
 for r in residents:
-    total = 0
-    morning_count = 0
-    afternoon_count = 0
-    both_in_one_day = 0
-    free_days = 0
-    for d in days:
+    for nd in night_shifts.get(r, []):
+        if nd in date_map:
+            night_lookup[r].add(nd)
+            nd2 = (date_map[nd] + timedelta(days=1)).strftime("%Y-%m-%d")
+            if nd2 in date_map:
+                night_lookup[r].add(nd2)
+
+# Fill letters with precedence M > A > N > F (single letter per cell)
+for d in days:
+    for r in residents:
         m = solver.Value(x[(r, d, "morning")])
         a = solver.Value(x[(r, d, "afternoon")])
-        total += m + a
-        morning_count += m
-        afternoon_count += a
-        if m + a == 0:
-            free_days += 1
-        if m == 1 and a == 1:
-            both_in_one_day += 1
+        # If both are 1 (shouldn't happen with one_shift_per_day), prefer M to avoid ambiguity.
+        if m == 1:
+            letters.at[d, r] = "M"
+        elif a == 1:
+            letters.at[d, r] = "A"
+        elif d in night_lookup[r]:
+            letters.at[d, r] = "N"
+        else:
+            letters.at[d, r] = "F"
+
+# 6.2 Totals per resident (compute from decision variables)
+# Definitions:
+#  - Morning total       = sum_d x[(r,d,"morning")]
+#  - Afternoon total     = sum_d x[(r,d,"afternoon")]
+#  - Free days           = {d | no M/A AND d not in night_lookup[r]}
+#  - Free + Unavailability = | Free ∪ (unavailability[r] ∩ horizon) |
+days_set = set(days)
+tot_m = {}
+tot_a = {}
+tot_free = {}
+tot_free_plus_unav = {}
+for r in residents:
+    tm = sum(solver.Value(x[(r, d, "morning")])   for d in days)
+    ta = sum(solver.Value(x[(r, d, "afternoon")]) for d in days)
+    free_days_set = {
+        d for d in days
+        if (solver.Value(x[(r, d, "morning")]) + solver.Value(x[(r, d, "afternoon")]) == 0)
+        and (d not in night_lookup[r])
+    }
+    unav_days_set = set(unavailable.get(r, [])) & days_set
+
+    tot_m[r] = int(tm)
+    tot_a[r] = int(ta)
+    tot_free[r] = len(free_days_set)
+    tot_free_plus_unav[r] = len(free_days_set | unav_days_set)
+
+# Assemble totals rows (rows = metrics, columns = residents)
+row_names = [
+    "Total morning",
+    "Total afternoon",
+    "Total free days",
+    "Total free + unavailability",
+]
+df_totals = pd.DataFrame(
+    [tot_m, tot_a, tot_free, tot_free_plus_unav],
+    index=row_names,
+    columns=residents,
+)
+
+# 6.3 Stitch totals above the per-date rows and add "Date" as first column
+df_out = pd.concat([df_totals, letters], axis=0)
+df_out.insert(0, "Date", list(df_out.index))
+
+# 6.4 Add "Notations" column (explanations only on totals rows)
+notations = []
+for idx in df_out.index:
+    if idx == "Total morning":
+        notations.append("M = morning")
+    elif idx == "Total afternoon":
+        notations.append("A = afternoon")
+    elif idx == "Total free days":
+        notations.append("F = free (no M/A, not night)")
+    elif idx == "Total free + unavailability":
+        notations.append("F + U = free days + unavailable days")
+    else:
+        notations.append("")  # date rows: blank
+df_out["Notations"] = notations
+
+# 6.5 Write wide CSV
+wide_path = os.path.join(RUN_DIR, "schedule_wide.csv")
+df_out.to_csv(wide_path, index=False)
+
+# 6.6 Concise terminal output: status + the wide table
+print("\n=== Solve summary ===")
+print(f"Status: {status_map.get(status, 'UNKNOWN')}")
+print(f"Days: {len(days)} | Residents: {len(residents)} | Shifts/day: {len(shifts)}")
+print(f"Coverage per shift: {required_staff}")
+print("\nFinal Schedule (wide):")
+print(df_out.to_string(index=False))
+
+# 6.7 Resident-wise summary (compact & aligned with totals above)
+print("\nResident-wise summary (compact):")
+for r in residents:
+    tm = tot_m[r]
+    ta = tot_a[r]
+    # Recompute sets here to keep the print in sync with the definitions above
+    free_days_set = {
+        d for d in days
+        if (solver.Value(x[(r, d, "morning")]) + solver.Value(x[(r, d, "afternoon")]) == 0)
+        and (d not in night_lookup[r])
+    }
+    unav_days_set = set(unavailable.get(r, [])) & days_set
+    both_in_one_day = sum(
+        1 for d in days
+        if (solver.Value(x[(r, d, "morning")]) == 1 and solver.Value(x[(r, d, "afternoon")]) == 1)
+    )
+    if both_in_one_day:
+        print(f"[WARN] {r} has {both_in_one_day} day(s) with both M and A assigned.")
     print(f"\n {r}:")
-    print(f"    Total shifts:            {total}")
-    print(f"    Morning shifts:          {morning_count}")
-    print(f"    Afternoon shifts:        {afternoon_count}")
-    print(f"    Morning+Afternoon days:  {both_in_one_day}")
-    print(f"    Completely free days:    {free_days}")
+    print(f"    Total shifts:                 {tm + ta}")
+    print(f"    Morning shifts:               {tm}")
+    print(f"    Afternoon shifts:             {ta}")
+    print(f"    Free days (excl nights):      {len(free_days_set)}")
+    print(f"    Free + Unavailability days:   {len(free_days_set | unav_days_set)}")
+
 
 # =========================
 # 7) HEATMAP (PNG saved per run)
