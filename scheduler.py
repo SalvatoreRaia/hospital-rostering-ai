@@ -156,11 +156,10 @@ def load_residents_csv(data_dir):
 
     return residents, unavailable, night_shifts
 
-
-
 # =========================
 # 1) GLOBAL DEFAULTS (can be overridden by CSVs)
 # =========================
+
 print("Generating weekdays for July 2025...")
 residents = [f"Res{i}" for i in range(9)]
 required_staff = {"morning": 4, "afternoon": 2}
@@ -325,7 +324,7 @@ def to_json(obj):
 # 6.0 Run info (always write; useful for debugging even if infeasible)
 run_info_rows = [
     {"key": "run_timestamp", "value": RUN_TS},
-    {"key": "weekdays_only", "value": True},
+    {"key": "weekdays_only", "value": WEEKDAYS_ONLY},
     {"key": "start_date", "value": start_date.strftime("%Y-%m-%d")},
     {"key": "end_date", "value": end_date.strftime("%Y-%m-%d")},
     {"key": "n_days", "value": len(days)},
@@ -571,6 +570,6 @@ plt.tight_layout()
 plt.show()
 
 print(f"\nSaved run outputs to: {RUN_DIR}")
-print(" - assignments_long.csv")
+print(" - schedule_wide.csv")
 print(" - run_info.csv")
 print(" - heatmap.png")
