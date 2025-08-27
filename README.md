@@ -43,7 +43,7 @@ Back-end: Python, Google **OR-Tools CP-SAT**, **pandas**, **matplotlib**/**seabo
 3) **Install dependencies**
 
    Install the requirements like this:
-   
+
    ~~~bash
    pip install -r requirements.txt
    ~~~
@@ -418,9 +418,21 @@ Check `outputs/run_*/run_info.csv`: `constraints_used_keys` and `constraints_use
 
 ---
 
-## License & citation
+## License & Citation
 
-**License:** MIT (recommended). Add a `LICENSE` file or replace this line with your chosen license.
+**License:** [MIT](LICENSE) © 2025 Salvatore Raia  
+SPDX-License-Identifier: MIT
+
+**How to cite**
+If you use this repo, please cite:
+
+```bibtex
+@software{hospital_rostering_ai,
+  author = {Salvatore Raia},
+  title  = {Hospital Rostering — CSV-Driven CP-SAT Scheduler},
+  year   = {2025},
+  url    = {https://github.com/SalvatoreRaia/hospital-rostering-ai}
+}
 
 **Cite / Acknowledge**
 - Google OR-Tools (CP-SAT): https://developers.google.com/optimization
