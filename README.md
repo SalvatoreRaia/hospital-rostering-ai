@@ -26,7 +26,7 @@ Back-end: Python, Google **OR-Tools CP-SAT**, **pandas**, **matplotlib**/**seabo
 1) **Clone and enter the repo**
    
    ~~~bash
-   git clone https://github.com/<you>/hospital-rostering-ai.git
+   git clone https://github.com/SalvatoreRaia/hospital-rostering-ai.git
    cd hospital-rostering-ai
    ~~~
 
@@ -42,16 +42,7 @@ Back-end: Python, Google **OR-Tools CP-SAT**, **pandas**, **matplotlib**/**seabo
 
 3) **Install dependencies**
 
-   If you don’t have a `requirements.txt` yet, create one like this:
-
-   ~~~text
-   ortools
-   pandas
-   matplotlib
-   seaborn
-   ~~~
-
-   Then:
+   Use this line on your terminal:
 
    ~~~bash
    pip install -r requirements.txt
@@ -351,9 +342,6 @@ A single “wide” table:
   - `N` = night day or next day (only if **no** M/A is assigned that day)
   - `F` = free (no M/A and not night-blocked)
 
-**Letter precedence used when writing daily cells:** `M > A > N > F`.  
-That is, if a resident is assigned `M` or `A`, the cell shows `M` or `A` even if the date is in their night exclusion set.
-
 > The script also prints a **resident-wise summary** and warns if it ever finds a day with both `M` and `A` for the same resident (which shouldn’t occur if `one_shift_per_day` is enabled).
 
 ### 3) `heatmap.png`
@@ -363,8 +351,6 @@ A color-coded matrix (residents × days). Encoding:
 - **Free** = white
 - **Morning** = blue
 - **Afternoon** = yellow
-
-**Important nuance:** the heatmap only paints *Unavailability* / *Night* if the cell has **no** assigned day shift (i.e., they don’t override `M/A` colors). This makes actual assignments visually primary.
 
 ---
 
@@ -397,14 +383,7 @@ This matches the operational rule “night runs from 20:00 of `d` to 08:00 of `d
 - Relax coverage (e.g., reduce `required_staff_*`) or reduce constraints (disable one at a time).
 - Ensure `start_date`, `end_date`, and `weekdays_only` define the horizon you intend (e.g., weekends excluded may shrink capacity).
 
-**Headless plotting (servers/CI)**
-- If `matplotlib` cannot open a display, set the backend to non-interactive:
-  - Environment variable: `MPLBACKEND=Agg`
-  - Or add at the top of the script before importing `pyplot`:
-    ~~~python
-    import matplotlib
-    matplotlib.use("Agg")
-    ~~~
+
 
 **“Why does one resident have fewer free days?”**
 - *Fairness* equalizes **total shifts**, not **free days**.  
