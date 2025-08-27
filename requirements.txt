@@ -1,0 +1,5 @@
+ortools>=9.10
+pandas>=2.2
+matplotlib>=3.8
+seaborn>=0.13
+python-dateutil>=2.9
