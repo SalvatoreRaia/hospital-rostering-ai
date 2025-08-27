@@ -427,11 +427,3 @@ Check `outputs/run_*/run_info.csv`: `constraints_used_keys` and `constraints_use
 
 ---
 
-## Appendix: minimal `requirements.txt` (if you need one)
-
-~~~text
-ortools
-pandas
-matplotlib
-seaborn
-~~~
