@@ -42,8 +42,8 @@ Back-end: Python, Google **OR-Tools CP-SAT**, **pandas**, **matplotlib**/**seabo
 
 3) **Install dependencies**
 
-   Use this line on your terminal:
-
+   Install the requirements like this:
+   
    ~~~bash
    pip install -r requirements.txt
    ~~~
